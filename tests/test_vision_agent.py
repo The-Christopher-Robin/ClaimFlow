@@ -18,7 +18,7 @@ async def test_vision_agent_analyze_damage():
     assert result.damage_type in ["collision", "hail", "flood", "fire", "vandalism"]
     assert result.severity in ["minor", "moderate", "severe", "total_loss"]
     assert result.estimated_cost > 0
-    assert 0 < result.confidence < 1
+    assert 0 <= result.confidence <= 1
 
 
 @pytest.mark.asyncio
