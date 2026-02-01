@@ -52,7 +52,7 @@ def test_process_claim_endpoint():
     assert "pdf_path" in result
     
     # Check damage analysis
-    assert result["damage_analysis"]["damage_type"] in ["collision", "hail", "flood", "fire", "vandalism"]
+    assert result["damage_analysis"]["damage_type"] in ["Collision", "Hail", "Flood", "Fire", "Vandalism"]
     assert result["damage_analysis"]["estimated_cost"] > 0
     
     # Check policy info

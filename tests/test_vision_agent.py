@@ -15,7 +15,7 @@ async def test_vision_agent_analyze_damage():
     result = await agent.analyze_damage(mock_image)
     
     # Check that result has expected fields
-    assert result.damage_type in ["collision", "hail", "flood", "fire", "vandalism"]
+    assert result.damage_type in ["Collision", "Hail", "Flood", "Fire", "Vandalism"]
     assert result.severity in ["minor", "moderate", "severe", "total_loss"]
     assert result.estimated_cost > 0
     assert 0 <= result.confidence <= 1

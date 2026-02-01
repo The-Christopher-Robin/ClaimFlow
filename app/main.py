@@ -6,7 +6,6 @@ from typing import Optional
 import os
 import uuid
 import logging
-import json
 from datetime import datetime
 
 from app.models import ClaimResponse, DamageAnalysis, PolicyInfo, PayoutCalculation
@@ -15,7 +14,6 @@ from app.agents.policy import PolicyAgent
 from app.agents.finance import FinanceAgent
 from app.services.pdf_service import PDFService
 from app.services.notification_service import NotificationService
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,7 +34,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize agents and services
 vision_agent = VisionAgent()
 policy_agent = PolicyAgent()
 finance_agent = FinanceAgent()
@@ -108,41 +105,34 @@ async def analyze_image(image: UploadFile = File(...)):
 @app.post("/tools/calculate_payout", response_model=PayoutCalculation)
 async def calculate_payout(
     estimated_cost: float = Form(...),
-    damage_type: str = Form(...),
-    policy_id: str = Form(...)
+    deductible: float = Form(...),
+    policy_id: Optional[str] = Form(None)
 ):
     """
-    Skill 2: Calculate payout based on damage and policy.
+    Skill 2: Calculate payout based on estimated cost and deductible.
     
     This endpoint only does math - it calculates what to pay.
     It can be called independently by Watsonx as a "Skill".
     
-    Input: estimated_cost, damage_type, policy_id
+    Input: estimated_cost, deductible, optional policy_id
     Output: PayoutCalculation with payout_amount and status
     """
     try:
-        logger.info(f"Calculating payout for policy {policy_id}, damage ${estimated_cost}")
+        if policy_id:
+            logger.info(f"Calculating payout for policy {policy_id}, damage ${estimated_cost}")
+        else:
+            logger.info(f"Calculating payout, damage ${estimated_cost}")
         
-        # Create mock DamageAnalysis for finance calculation
-        damage_analysis = DamageAnalysis(
-            damage_type=damage_type,
-            severity="moderate",  # Default, in real flow would come from image analysis
+        payout_amount = max(estimated_cost - deductible, 0)
+        status = "approved" if payout_amount > 0 else "denied"
+
+        payout_calculation = PayoutCalculation(
             estimated_cost=estimated_cost,
-            confidence=0.9
+            deductible=deductible,
+            payout_amount=payout_amount,
+            status=status
         )
-        
-        # Get policy info
-        policy_info = await policy_agent.get_policy_info(
-            policy_id=policy_id,
-            damage_type=damage_type
-        )
-        
-        # Calculate payout
-        payout_calculation = await finance_agent.calculate_payout(
-            damage_analysis=damage_analysis,
-            policy_info=policy_info
-        )
-        
+
         logger.info(f"Payout calculated: ${payout_calculation.payout_amount}, status={payout_calculation.status}")
         return payout_calculation
         
