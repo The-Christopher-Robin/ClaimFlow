@@ -8,7 +8,7 @@ class VisionAgent:
     """Mock vision agent that analyzes damage images."""
     
     def __init__(self):
-        self.damage_types = ["collision", "hail", "flood", "fire", "vandalism"]
+        self.damage_types = ["Collision", "Hail", "Flood", "Fire", "Vandalism"]
         self.severities = ["minor", "moderate", "severe", "total_loss"]
     
     async def analyze_damage(self, image_file: BinaryIO) -> DamageAnalysis:
