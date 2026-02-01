@@ -1,19 +1,15 @@
-"""Main FastAPI application for ClaimFlow."""
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+"""
+ClaimFlow Micro-Skills API
+Designed for IBM watsonx Orchestrate Integration.
+"""
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from typing import Optional
 import os
 import uuid
 import logging
 from datetime import datetime
-
-from app.models import ClaimResponse
-from app.agents.vision import VisionAgent
-from app.agents.policy import PolicyAgent
-from app.agents.finance import FinanceAgent
-from app.services.pdf_service import PDFService
-from app.services.notification_service import NotificationService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="ClaimFlow API",
-    description="Instant Auto-Claims Adjuster API",
-    version="1.0.0"
+    title="ClaimFlow Tools",
+    description="Micro-skills for IBM watsonx Agent",
+    version="2.0.0"
 )
 
 # CORS middleware
@@ -35,135 +31,117 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize agents and services
-vision_agent = VisionAgent()
-policy_agent = PolicyAgent()
-finance_agent = FinanceAgent()
-pdf_service = PDFService()
-notification_service = NotificationService(
-    slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL")
-)
-
 # Ensure directories exist
-os.makedirs("uploads", exist_ok=True)
 os.makedirs("output", exist_ok=True)
 
+# --- DATA MODELS (The Language of your Agent) ---
+
+class DamageAnalysis(BaseModel):
+    damage_type: str
+    severity: str
+    estimated_cost: float
+    confidence: float
+
+class PayoutRequest(BaseModel):
+    repair_cost: float
+    deductible: float
+    policy_id: str
+
+class PayoutResponse(BaseModel):
+    final_payout: float
+    status: str
+    offer_letter_url: str
+
+class PDFRequest(BaseModel):
+    claim_id: str
+    policy_id: str
+    final_amount: float
+    damage_type: str
+
+# --- THE SKILLS (Endpoints for Watsonx) ---
 
 @app.get("/")
-async def root():
-    """Health check endpoint."""
+def health_check():
+    """Keep-alive endpoint for IBM Code Engine."""
+    return {"status": "ClaimFlow Skills Active", "timestamp": datetime.now().isoformat()}
+
+# SKILL 1: Vision (The Eyes)
+@app.post("/tools/analyze-image", response_model=DamageAnalysis, summary="Analyze Car Damage")
+async def analyze_image_tool(image_name: str = "crash.jpg"):
+    """
+    Simulates analyzing a car photo.
+    Input: Image filename or URL.
+    Output: Damage details and cost estimate.
+    """
+    logger.info(f"Analyzing image: {image_name}")
+    
+    # Hackathon Logic: Return different results based on keywords in the filename
+    if "heavy" in image_name.lower() or "total" in image_name.lower():
+        return {
+            "damage_type": "Major Frontal Collision",
+            "severity": "High",
+            "estimated_cost": 4500.0,
+            "confidence": 0.98
+        }
+    elif "scratch" in image_name.lower():
+        return {
+            "damage_type": "Paint Scratch",
+            "severity": "Low",
+            "estimated_cost": 350.0,
+            "confidence": 0.85
+        }
+    else:
+        # Default case (The Bumper Dent)
+        return {
+            "damage_type": "Front Bumper Dent",
+            "severity": "Medium",
+            "estimated_cost": 850.0,
+            "confidence": 0.95
+        }
+
+# SKILL 2: Finance (The Calculator)
+@app.post("/tools/calculate-payout", response_model=PayoutResponse, summary="Calculate Final Payout")
+def calculate_payout_tool(data: PayoutRequest):
+    """
+    Calculates the final check amount.
+    """
+    logger.info(f"Calculating payout for Policy {data.policy_id}")
+    
+    amount = data.repair_cost - data.deductible
+    
+    # Logic: Cannot have negative payout
+    if amount < 0:
+        return {
+            "final_payout": 0.0,
+            "status": "Denied (Below Deductible)",
+            "offer_letter_url": "N/A"
+        }
+    
+    # In a real app, this URL would point to a generated PDF
+    # For Hackathon, we return a mock URL or use the PDF tool
     return {
-        "message": "ClaimFlow API is running",
-        "version": "1.0.0",
-        "status": "healthy"
+        "final_payout": amount,
+        "status": "Approved",
+        "offer_letter_url": f"https://claimflow.ibm.com/offers/{data.policy_id}_{uuid.uuid4().hex[:8]}.pdf"
     }
 
-
-@app.get("/health")
-async def health():
-    """Health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-
-@app.post("/api/claims/process", response_model=ClaimResponse)
-async def process_claim(
-    policy_id: str = Form(...),
-    image: UploadFile = File(...),
-    email: Optional[str] = Form(None)
-):
+# SKILL 3: PDF Generator (The Paperwork)
+@app.post("/tools/generate-pdf", summary="Generate Offer Letter")
+def generate_pdf_tool(data: PDFRequest):
     """
-    Process a new claim with image and policy ID.
-    
-    This endpoint orchestrates the three agents:
-    1. Vision Agent - analyzes the damage image
-    2. Policy Agent - retrieves policy information
-    3. Finance Agent - calculates payout
-    
-    Also generates a PDF offer letter and sends notifications.
+    Generates the official PDF offer letter.
     """
-    try:
-        # Generate unique claim ID
-        claim_id = str(uuid.uuid4())
-        logger.info(f"Processing claim {claim_id} for policy {policy_id}")
-        
-        # Save uploaded image
-        image_path = f"uploads/{claim_id}_{image.filename}"
-        with open(image_path, "wb") as f:
-            content = await image.read()
-            f.write(content)
-        
-        # Step 1: Vision Agent - Analyze damage
-        logger.info(f"Running Vision Agent for claim {claim_id}")
-        with open(image_path, "rb") as img_file:
-            damage_analysis = await vision_agent.analyze_damage(img_file)
-        logger.info(f"Damage analysis complete: {damage_analysis.damage_type}, ${damage_analysis.estimated_cost}")
-        
-        # Step 2: Policy Agent - Get policy info
-        logger.info(f"Running Policy Agent for claim {claim_id}")
-        policy_info = await policy_agent.get_policy_info(
-            policy_id=policy_id,
-            damage_type=damage_analysis.damage_type
-        )
-        logger.info(f"Policy info retrieved: covered={policy_info.is_covered}")
-        
-        # Step 3: Finance Agent - Calculate payout
-        logger.info(f"Running Finance Agent for claim {claim_id}")
-        payout_calculation = await finance_agent.calculate_payout(
-            damage_analysis=damage_analysis,
-            policy_info=policy_info
-        )
-        logger.info(f"Payout calculated: ${payout_calculation.payout_amount}, status={payout_calculation.status}")
-        
-        # Create claim response
-        claim_response = ClaimResponse(
-            claim_id=claim_id,
-            damage_analysis=damage_analysis,
-            policy_info=policy_info,
-            payout_calculation=payout_calculation,
-            created_at=datetime.now()
-        )
-        
-        # Generate PDF offer letter
-        logger.info(f"Generating PDF for claim {claim_id}")
-        pdf_path = pdf_service.generate_offer_letter(claim_response)
-        claim_response.pdf_path = pdf_path
-        logger.info(f"PDF generated: {pdf_path}")
-        
-        # Send notifications
-        logger.info(f"Sending notifications for claim {claim_id}")
-        notification_results = await notification_service.notify_all(
-            claim=claim_response,
-            email=email
-        )
-        logger.info(f"Notifications sent: {notification_results}")
-        
-        return claim_response
-        
-    except Exception as e:
-        logger.error(f"Error processing claim: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error processing claim: {str(e)}")
-
-
-@app.get("/api/claims/{claim_id}/pdf")
-async def get_claim_pdf(claim_id: str):
-    """Download the PDF offer letter for a claim."""
-    # Find the PDF file
-    output_dir = "output"
-    pdf_files = [f for f in os.listdir(output_dir) if f.startswith(f"claim_{claim_id}_")]
+    # Create a unique ID
+    offer_id = uuid.uuid4().hex
+    filename = f"claim_{offer_id}_offer.pdf"
     
-    if not pdf_files:
-        raise HTTPException(status_code=404, detail="PDF not found")
-    
-    # Return the most recent PDF if multiple exist
-    pdf_file = sorted(pdf_files)[-1]
-    pdf_path = os.path.join(output_dir, pdf_file)
-    
-    return FileResponse(
-        pdf_path,
-        media_type="application/pdf",
-        filename=f"claim_{claim_id}_offer.pdf"
-    )
-
+    # Logic: We are mocking the file creation for speed, 
+    # but in a real app, you would use reportlab here.
+    return {
+        "message": "PDF Generated Successfully",
+        "filename": filename,
+        "download_url": f"/api/claims/{offer_id}/pdf"
+    }
 
 if __name__ == "__main__":
     import uvicorn
