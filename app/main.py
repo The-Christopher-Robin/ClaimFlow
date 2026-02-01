@@ -79,4 +79,92 @@ async def analyze_image_tool(image_name: str = "crash.jpg"):
     name_lower = image_name.lower()
     if "total" in name_lower or "heavy" in name_lower:
         return {
-            "damage
+            "damage_type": "Major Frontal Collision",
+            "severity": "High",
+            "estimated_cost": 4500.0,
+            "confidence": 0.98
+        }
+    elif "scratch" in name_lower:
+        return {
+            "damage_type": "Paint Scratch",
+            "severity": "Low",
+            "estimated_cost": 350.0,
+            "confidence": 0.85
+        }
+    else:
+        # Default case
+        return {
+            "damage_type": "Front Bumper Dent",
+            "severity": "Medium",
+            "estimated_cost": 850.0,
+            "confidence": 0.95
+        }
+
+# SKILL 2: Finance (The Calculator)
+@app.post("/tools/calculate-payout", response_model=PayoutResponse, summary="Calculate Final Payout")
+def calculate_payout_tool(data: PayoutRequest):
+    """
+    Calculates the final check amount.
+    """
+    amount = data.repair_cost - data.deductible
+    if amount < 0: 
+        amount = 0.0
+    
+    # Generate a Mock Offer ID
+    offer_id = uuid.uuid4().hex[:8].upper()
+    
+    return {
+        "final_payout": amount,
+        "status": "Approved" if amount > 0 else "Denied",
+        # We point this URL to our new PDF generator endpoint below
+        "offer_letter_url": f"{BASE_URL}/api/claims/{offer_id}/pdf"
+    }
+
+# SKILL 3: PDF Generator (The Paperwork)
+@app.post("/tools/generate-pdf", summary="Generate Offer Letter")
+def generate_pdf_tool(data: PDFRequest):
+    """
+    Generates the official PDF offer letter link.
+    """
+    # Create a unique ID
+    offer_id = uuid.uuid4().hex[:8]
+    
+    # CRITICAL FIX: Return the Full Public URL
+    download_link = f"{BASE_URL}/api/claims/{offer_id}/pdf"
+    
+    return {
+        "message": "PDF Generated Successfully",
+        "filename": f"claim_{offer_id}.pdf",
+        "download_url": download_link
+    }
+
+# --- THE RECEIPT ENDPOINT (Makes the link work) ---
+@app.get("/api/claims/{offer_id}/pdf")
+def get_offer_pdf(offer_id: str):
+    """
+    Serves a text receipt that looks like a PDF for the demo.
+    """
+    content = f"""
+    =========================================
+          OFFICIAL CLAIMFLOW RECEIPT
+    =========================================
+    
+    CLAIM ID: {offer_id}
+    DATE:     {datetime.now().strftime("%Y-%m-%d")}
+    STATUS:   APPROVED
+    
+    -----------------------------------------
+    Thank you for using ClaimFlow. 
+    Your payout assessment is complete.
+    
+    Please retain this document for your records.
+    
+    [Authorized Signature]
+    IBM watsonx Orchestrate Agent
+    =========================================
+    """
+    return PlainTextResponse(content)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
