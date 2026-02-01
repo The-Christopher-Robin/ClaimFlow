@@ -6,9 +6,10 @@ from typing import Optional
 import os
 import uuid
 import logging
+import json
 from datetime import datetime
 
-from app.models import ClaimResponse
+from app.models import ClaimResponse, DamageAnalysis, PolicyInfo, PayoutCalculation
 from app.agents.vision import VisionAgent
 from app.agents.policy import PolicyAgent
 from app.agents.finance import FinanceAgent
@@ -65,6 +66,165 @@ async def health():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
+# ============================================================================
+# NEW SKILL ENDPOINTS - For Watsonx Integration
+# ============================================================================
+
+@app.post("/tools/analyze_image", response_model=DamageAnalysis)
+async def analyze_image(image: UploadFile = File(...)):
+    """
+    Skill 1: Analyze damage image.
+    
+    This endpoint only does image analysis and returns damage data.
+    It can be called independently by Watsonx as a "Skill".
+    
+    Input: Image file
+    Output: DamageAnalysis with damage_type, severity, estimated_cost, confidence
+    """
+    try:
+        logger.info(f"Analyzing image: {image.filename}")
+        
+        # Save uploaded image temporarily
+        temp_path = f"uploads/temp_{uuid.uuid4()}_{image.filename}"
+        with open(temp_path, "wb") as f:
+            content = await image.read()
+            f.write(content)
+        
+        # Analyze damage
+        with open(temp_path, "rb") as img_file:
+            damage_analysis = await vision_agent.analyze_damage(img_file)
+        
+        # Clean up temp file
+        os.remove(temp_path)
+        
+        logger.info(f"Image analysis complete: {damage_analysis.damage_type}, ${damage_analysis.estimated_cost}")
+        return damage_analysis
+        
+    except Exception as e:
+        logger.error(f"Error analyzing image: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing image: {str(e)}")
+
+
+@app.post("/tools/calculate_payout", response_model=PayoutCalculation)
+async def calculate_payout(
+    estimated_cost: float = Form(...),
+    damage_type: str = Form(...),
+    policy_id: str = Form(...)
+):
+    """
+    Skill 2: Calculate payout based on damage and policy.
+    
+    This endpoint only does math - it calculates what to pay.
+    It can be called independently by Watsonx as a "Skill".
+    
+    Input: estimated_cost, damage_type, policy_id
+    Output: PayoutCalculation with payout_amount and status
+    """
+    try:
+        logger.info(f"Calculating payout for policy {policy_id}, damage ${estimated_cost}")
+        
+        # Create mock DamageAnalysis for finance calculation
+        damage_analysis = DamageAnalysis(
+            damage_type=damage_type,
+            severity="moderate",  # Default, in real flow would come from image analysis
+            estimated_cost=estimated_cost,
+            confidence=0.9
+        )
+        
+        # Get policy info
+        policy_info = await policy_agent.get_policy_info(
+            policy_id=policy_id,
+            damage_type=damage_type
+        )
+        
+        # Calculate payout
+        payout_calculation = await finance_agent.calculate_payout(
+            damage_analysis=damage_analysis,
+            policy_info=policy_info
+        )
+        
+        logger.info(f"Payout calculated: ${payout_calculation.payout_amount}, status={payout_calculation.status}")
+        return payout_calculation
+        
+    except Exception as e:
+        logger.error(f"Error calculating payout: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error calculating payout: {str(e)}")
+
+
+@app.post("/tools/generate_pdf", response_model=dict)
+async def generate_pdf(
+    claim_id: str = Form(...),
+    policy_id: str = Form(...),
+    damage_type: str = Form(...),
+    severity: str = Form(...),
+    estimated_cost: float = Form(...),
+    deductible: float = Form(...),
+    coverage_limit: float = Form(...),
+    is_covered: bool = Form(...),
+    payout_amount: float = Form(...)
+):
+    """
+    Skill 3: Generate PDF offer letter.
+    
+    This endpoint only generates the PDF.
+    It can be called independently by Watsonx as a "Skill".
+    
+    Input: All claim details (damage, policy, payout info)
+    Output: JSON with pdf_path
+    """
+    try:
+        logger.info(f"Generating PDF for claim {claim_id}")
+        
+        # Reconstruct the claim response from the input parameters
+        damage_analysis = DamageAnalysis(
+            damage_type=damage_type,
+            severity=severity,
+            estimated_cost=estimated_cost,
+            confidence=0.9
+        )
+        
+        policy_info = PolicyInfo(
+            policy_id=policy_id,
+            deductible=deductible,
+            coverage_limit=coverage_limit,
+            is_covered=is_covered,
+            coverage_details="Policy details from Watsonx"
+        )
+        
+        payout_calculation = PayoutCalculation(
+            estimated_cost=estimated_cost,
+            deductible=deductible,
+            payout_amount=payout_amount,
+            status="approved" if is_covered else "denied"
+        )
+        
+        claim_response = ClaimResponse(
+            claim_id=claim_id,
+            damage_analysis=damage_analysis,
+            policy_info=policy_info,
+            payout_calculation=payout_calculation,
+            created_at=datetime.now()
+        )
+        
+        # Generate PDF
+        pdf_path = pdf_service.generate_offer_letter(claim_response)
+        logger.info(f"PDF generated: {pdf_path}")
+        
+        return {
+            "success": True,
+            "pdf_path": pdf_path,
+            "claim_id": claim_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating PDF: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
+
+
+# ============================================================================
+# ORIGINAL MONOLITHIC ENDPOINT - Keep for backward compatibility
+# ============================================================================
+
 @app.post("/api/claims/process", response_model=ClaimResponse)
 async def process_claim(
     policy_id: str = Form(...),
@@ -80,6 +240,8 @@ async def process_claim(
     3. Finance Agent - calculates payout
     
     Also generates a PDF offer letter and sends notifications.
+    
+    NOTE: For Watsonx integration, use the individual /tools/* endpoints instead.
     """
     try:
         # Generate unique claim ID
